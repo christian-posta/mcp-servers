@@ -22,6 +22,18 @@ uv run python -m mcp_server_echo
 uv run python -m mcp_server_echo.jwt_server
 ```
 
+You can run with your own tokens by generating them:
+
+```bash
+python generate_token.py
+```
+
+Or run the full test:
+
+```bash
+python test_jwt_server.py
+```
+
 This will automatically:
 - Create a virtual environment
 - Install dependencies from `pyproject.toml`
