@@ -1,10 +1,11 @@
 import asyncio
 import json
 import logging
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Union
 from uuid import uuid4
 
 from fastapi import FastAPI, HTTPException, Request
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from mcp.server import Server
 from mcp.types import (
@@ -36,10 +37,12 @@ class EchoRequest(BaseModel):
     repeat_count: int = Field(default=1, description="Number of times to repeat the message", ge=1, le=10)
 
 
+from typing import Union
+
 class MCPRequest(BaseModel):
     """MCP request wrapper for HTTP transport."""
     jsonrpc: str = "2.0"
-    id: str
+    id: Optional[Union[str, int]] = None  # Optional for notifications
     method: str
     params: Optional[Dict[str, Any]] = None
 
@@ -47,13 +50,13 @@ class MCPRequest(BaseModel):
 class MCPResponse(BaseModel):
     """MCP response wrapper for HTTP transport."""
     jsonrpc: str = "2.0"
-    id: str
+    id: Union[str, int]  # JSON-RPC allows both string and integer IDs
     result: Optional[Dict[str, Any]] = None
     error: Optional[Dict[str, Any]] = None
 
 
 class HTTPMCPServer:
-    """HTTP-based MCP server implementation."""
+    """HTTP-based MCP server implementation with CORS and OAuth discovery."""
     
     def __init__(self):
         logger.info("Initializing HTTPMCPServer")
@@ -61,6 +64,17 @@ class HTTPMCPServer:
         logger.info("Created MCP Server instance")
         self.app = FastAPI(title="MCP Echo Server", version="0.1.0")
         logger.info("Created FastAPI app")
+        
+        # Add CORS middleware
+        self.app.add_middleware(
+            CORSMiddleware,
+            allow_origins=["*"],  # In production, be more specific
+            allow_credentials=True,
+            allow_methods=["*"],
+            allow_headers=["*"],
+        )
+        logger.info("Added CORS middleware")
+        
         self.setup_routes()
         logger.info("Setup FastAPI routes")
         self.setup_mcp_handlers()
@@ -81,7 +95,21 @@ class HTTPMCPServer:
                 mcp_request = MCPRequest(**body)
                 logger.debug(f"Parsed MCP request: method={mcp_request.method}, params={mcp_request.params}")
                 
-                # Route to appropriate handler based on method
+                # Handle notifications (no ID, no response required)
+                if mcp_request.id is None:
+                    logger.info(f"Handling notification: {mcp_request.method}")
+                    if mcp_request.method == "notifications/initialized":
+                        logger.info("Client has completed initialization")
+                    elif mcp_request.method == "notifications/cancelled":
+                        logger.info("Client cancelled a request")
+                    else:
+                        logger.warning(f"Unknown notification: {mcp_request.method}")
+                    
+                    # Notifications get 202 Accepted with no body
+                    return JSONResponse(status_code=202, content=None)
+                
+                # Handle requests (have ID, need response)
+                result = None
                 if mcp_request.method == "initialize":
                     logger.info("Handling initialize request")
                     result = await self.handle_initialize(mcp_request.params or {})
@@ -129,7 +157,7 @@ class HTTPMCPServer:
                     status_code=500,
                     content={
                         "jsonrpc": "2.0",
-                        "id": body.get("id", "unknown"),
+                        "id": body.get("id", "unknown") if body.get("id") is not None else None,
                         "error": {
                             "code": -32603,
                             "message": f"Internal error: {str(e)}"
@@ -137,11 +165,54 @@ class HTTPMCPServer:
                     }
                 )
         
+        @self.app.get("/mcp")
+        async def handle_mcp_get(request: Request):
+            """Handle GET requests to MCP endpoint."""
+            logger.info("GET request to MCP endpoint")
+            return JSONResponse(content={
+                "server": "mcp-echo",
+                "transport": "streamable-http",
+                "version": "0.1.0"
+            })
+        
         @self.app.get("/health")
         async def health_check():
             """Health check endpoint."""
             logger.info("Health check requested")
             return {"status": "healthy", "server": "mcp-echo"}
+        
+        # OAuth 2.0 discovery endpoints (empty responses for no-auth servers)
+        @self.app.get("/.well-known/oauth-protected-resource")
+        async def oauth_protected_resource():
+            """OAuth 2.0 Protected Resource Metadata."""
+            logger.info("OAuth protected resource metadata requested")
+            return JSONResponse(content={
+                "resource": "http://localhost:9000/mcp",
+                # Empty means no authorization required
+            })
+        
+        @self.app.get("/.well-known/oauth-authorization-server")
+        @self.app.get("/.well-known/oauth-authorization-server/mcp")
+        async def oauth_authorization_server():
+            """OAuth 2.0 Authorization Server Metadata."""
+            logger.info("OAuth authorization server metadata requested")
+            return JSONResponse(content={
+                # Empty means no authorization server configured
+            })
+        
+        # Handle CORS preflight requests
+        @self.app.options("/{path:path}")
+        async def options_handler(path: str):
+            """Handle CORS preflight requests."""
+            logger.info(f"CORS preflight request for path: {path}")
+            return JSONResponse(
+                content={},
+                headers={
+                    "Access-Control-Allow-Origin": "*",
+                    "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+                    "Access-Control-Allow-Headers": "*",
+                }
+            )
         
         logger.info("FastAPI routes setup complete")
     
@@ -232,7 +303,6 @@ class HTTPMCPServer:
         try:
             logger.info("Handling tools/list request directly")
             
-            # Return the tools directly since we know what they are
             tools = [
                 {
                     "name": "echo",
@@ -242,11 +312,7 @@ class HTTPMCPServer:
             ]
             
             logger.info(f"Returning {len(tools)} tools")
-            logger.debug(f"Tools: {tools}")
-            
-            result = {"tools": tools}
-            logger.info(f"Returning tools list with {len(result['tools'])} tools")
-            return result
+            return {"tools": tools}
         except Exception as e:
             logger.error(f"Error in handle_list_tools: {e}", exc_info=True)
             raise
@@ -263,14 +329,12 @@ class HTTPMCPServer:
                 logger.error("Tool name is required but not provided")
                 raise ValueError("Tool name is required")
             
-            # Handle the echo tool directly
             if name == "echo":
                 echo_args = EchoRequest(**arguments)
                 repeated_message = echo_args.message * echo_args.repeat_count
                 logger.info(f"Echo tool returning: {repeated_message}")
                 
                 content = [{"type": "text", "text": repeated_message}]
-                logger.info(f"Tool {name} returned {len(content)} content items")
                 
                 result = {
                     "content": content,
@@ -291,7 +355,6 @@ class HTTPMCPServer:
         try:
             logger.info("Handling prompts/list request directly")
             
-            # Return the prompts directly since we know what they are
             prompts = [
                 {
                     "name": "echo_prompt",
@@ -307,11 +370,7 @@ class HTTPMCPServer:
             ]
             
             logger.info(f"Returning {len(prompts)} prompts")
-            logger.debug(f"Prompts: {prompts}")
-            
-            result = {"prompts": prompts}
-            logger.info(f"Returning prompts list with {len(result['prompts'])} prompts")
-            return result
+            return {"prompts": prompts}
         except Exception as e:
             logger.error(f"Error in handle_list_prompts: {e}", exc_info=True)
             raise
@@ -328,7 +387,6 @@ class HTTPMCPServer:
                 logger.error("Prompt name is required but not provided")
                 raise ValueError("Prompt name is required")
             
-            # Handle the echo_prompt directly
             if name == "echo_prompt":
                 message = arguments.get("message", "Hello, World!") if arguments else "Hello, World!"
                 logger.info(f"Echo prompt returning message: {message}")
@@ -342,8 +400,6 @@ class HTTPMCPServer:
                     ]
                 }
                 logger.info(f"Retrieved prompt {name}")
-                logger.debug(f"Prompt result: {result}")
-                
                 return result
             else:
                 logger.error(f"Unknown prompt: {name}")
@@ -353,13 +409,13 @@ class HTTPMCPServer:
             logger.error(f"Error in handle_get_prompt: {e}", exc_info=True)
             raise
     
-    def run(self, host: str = "0.0.0.0", port: int = 9000):
+    def run(self, host: str = "127.0.0.1", port: int = 9000):
         """Run the HTTP server."""
         logger.info(f"Starting HTTP server on {host}:{port}")
         uvicorn.run(self.app, host=host, port=port, log_level="info")
 
 
-def serve(host: str = "0.0.0.0", port: int = 9000) -> None:
+def serve(host: str = "127.0.0.1", port: int = 9000) -> None:
     """Run the echo MCP server."""
     logger.info(f"Starting MCP Echo Server on {host}:{port}")
     server = HTTPMCPServer()
@@ -369,4 +425,4 @@ def serve(host: str = "0.0.0.0", port: int = 9000) -> None:
 
 if __name__ == "__main__":
     logger.info("Starting MCP Echo Server from __main__")
-    serve() 
+    serve()
