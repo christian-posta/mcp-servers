@@ -18,6 +18,8 @@ A Model Context Protocol (MCP) server that provides echo functionality over HTTP
 ```bash
 cd src/echo
 uv run python -m mcp_server_echo
+
+uv run python -m mcp_server_echo.jwt_server
 ```
 
 This will automatically:
