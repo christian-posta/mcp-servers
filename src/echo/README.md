@@ -1,75 +1,124 @@
-# MCP Echo Server
+# MCP Auth Step-by-Step
 
-A Model Context Protocol (MCP) server that provides echo functionality over HTTP transport.
+A complete Model Context Protocol (MCP) implementation demonstrating remote MCP server with HTTP transport, and another server with authorization and communication between a server and client over HTTP transport.
+
+## Project Overview
+
+This project consists of two main components:
+
+1. **MCP Echo Server** - Two servers, that provides echo functionality. One without auth and one with JWT auth
+2. **MCP Echo Client** - A client for communicating with the non-auth echo server; communication with the auth server should happen with the test file, or generate your own keys and call it
 
 ## Features
 
+### Server Features
 - **Echo Tool**: Echo back messages with optional repetition
 - **HTTP Transport**: Communicate with the server over HTTP/JSON-RPC
 - **MCP Compliance**: Follows the MCP specification for tools and prompts
+- **JWT Authentication**: Secure authentication using JSON Web Tokens
 - **Health Check**: Built-in health check endpoint
 - **FastAPI**: Modern, fast web framework with automatic API documentation
 - **Docker Support**: Containerized deployment ready
 
+### Client Features
+- **HTTP Transport**: Communicate with MCP servers over HTTP/JSON-RPC
+- **Async Support**: Full async/await support for non-blocking operations
+- **Type Safety**: Built with Pydantic for type safety and validation
+- **Easy to Use**: Simple API for common MCP operations
+- **Error Handling**: Comprehensive error handling and reporting
+
 ## Quick Start
 
-### Option 1: Using `uv` (Recommended - No installation needed)
+### Prerequisites
+- Python 3.10 or higher
+- `uv` package manager (recommended) or `pip`
 
+### Running the Server
+
+#### Option 1: Using `uv` (Recommended)
 ```bash
-cd src/echo
+cd echo
 uv run python -m mcp_server_echo
+```
 
+To run the MCP server with JWT Authentication:
+```bash
 uv run python -m mcp_server_echo.jwt_server
 ```
 
-You can run with your own tokens by generating them:
+You can generate your own tokens and call with [mcp-inspector](https://github.com/modelcontextprotocol/inspector):
 
 ```bash
-python generate_token.py
+uv run python generate_token.py
+```
+You can run the mcp-inspector and connect to the MCP server:
+
+```bash
+npx @modelcontextprotocol/inspector
 ```
 
-Or run the full test:
+Or run the full JWT test:
 
 ```bash
-python test_jwt_server.py
+uv run python test_jwt_server.py
 ```
 
-This will automatically:
-- Create a virtual environment
-- Install dependencies from `pyproject.toml`
-- Start the server on `http://localhost:9000`
 
-### Option 2: Using `uvx` (Even simpler)
+### Running the Client
 
+The client is intended to be used with the non-auth MCP server. It shows HTTP Transport. To use test the JWT server, use mcp-inspector and generate your own token (see above)
+
+
+#### Option 1: Using `uv` (Recommended)
 ```bash
-cd src/echo
-uvx python -m mcp_server_echo
-```
-
-### Option 3: Manual installation
-
-```bash
-cd src/echo
-pip install -e .
-python -m mcp_server_echo
+cd echo-client
+uv run python -m mcp_echo_client
 ```
 
 ## Usage
 
-### Running the Server
+### Server Configuration
+
+The server runs on `http://localhost:9000` by default. You can customize the host and port:
 
 ```bash
-# Run with default settings (host: 0.0.0.0, port: 9000)
-uv run python -m mcp_server_echo
-
 # Run with custom host and port
 uv run python -m mcp_server_echo --host 127.0.0.1 --port 8080
 
 # Run with environment variable
 PORT=8000 uv run python -m mcp_server_echo
+```
 
-# Run the file directly
-uv run python src/mcp_server_echo/server.py --port 9000
+### Client Usage
+
+#### Basic Usage
+```python
+import asyncio
+from mcp_echo_client import MCPEchoClient
+
+async def main():
+    async with MCPEchoClient("http://localhost:9000") as client:
+        # Initialize the connection
+        await client.initialize()
+        
+        # List available tools
+        tools = await client.list_tools()
+        print(f"Available tools: {tools}")
+        
+        # Call the echo tool
+        result = await client.echo("Hello, World!", 3)
+        print(f"Echo result: {result}")
+
+asyncio.run(main())
+```
+
+#### Running the Demo
+```bash
+# Run the demo client (make sure server is running on port 9000)
+uv run python -m mcp_echo_client
+
+# Run against a different server
+uv run python -m mcp_echo_client --server-url http://localhost:8000
 ```
 
 ### API Endpoints
@@ -142,13 +191,6 @@ A prompt that demonstrates echo functionality.
 }
 ```
 
-## Testing
-
-### Health Check
-```bash
-curl http://localhost:9000/health
-```
-
 ### Raw HTTP Test
 ```bash
 # Initialize
@@ -162,38 +204,11 @@ curl -X POST http://localhost:9000/mcp \
   -d '{"jsonrpc":"2.0","id":"2","method":"tools/call","params":{"name":"echo","arguments":{"message":"Hello","repeat_count":2}}}'
 ```
 
-### Using the Client
-```bash
-cd src/echo-client
-uv run python -m mcp_echo_client
-```
-
-## Development
-
-### Project Structure
-```
-src/echo/
-├── src/mcp_server_echo/
-│   ├── __init__.py
-│   ├── __main__.py
-│   └── server.py
-├── pyproject.toml
-├── README.md
-├── Dockerfile
-├── example.py
-├── test_server.py
-└── install_and_test.py
-```
-
-### Dependencies
-- `mcp>=1.1.3` - MCP Python SDK
-- `fastapi>=0.104.0` - Web framework
-- `uvicorn>=0.24.0` - ASGI server
-- `pydantic>=2.0.0` - Data validation
 
 ### Docker
 ```bash
 # Build the server image
+cd echo
 docker build -t mcp-echo-server .
 
 # Run the server
@@ -214,6 +229,7 @@ This implementation follows the Model Context Protocol specification:
   - `prompts/get` - Get a prompt
   - `ping` - Health check
 
+
 ## License
 
-MIT 
+MIT
